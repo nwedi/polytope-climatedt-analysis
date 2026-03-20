@@ -200,6 +200,8 @@ class PolytopeZarrStore(MutableMapping):
                     request[f] = field_map[f]
             elif dim == "model":
                 request["model"] = str(coord_val)
+            elif dim == "level":
+                request["levelist"] = str(int(coord_val))
             else:
                 request[dim] = str(coord_val)
 
