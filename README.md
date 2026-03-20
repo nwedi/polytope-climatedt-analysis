@@ -21,7 +21,7 @@ cd polytope-climate-analysis
 ```bash
 conda create -n destine-analysis python=3.13
 conda activate destine-analysis
-pip install earthkit-data healpy matplotlib numpy xarray pandas netcdf4 polytope-client ipykernel conflator lxml pydantic
+pip install earthkit-data healpy matplotlib numpy xarray pandas netcdf4 polytope-client ipykernel conflator lxml pydantic zarr numcodecs
 ```
 
 **Option B: Using venv (no conda required)**
@@ -29,7 +29,7 @@ pip install earthkit-data healpy matplotlib numpy xarray pandas netcdf4 polytope
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install earthkit-data healpy matplotlib numpy xarray pandas netcdf4 polytope-client ipykernel conflator lxml pydantic
+pip install earthkit-data healpy matplotlib numpy xarray pandas netcdf4 polytope-client ipykernel conflator lxml pydantic zarr numcodecs
 ```
 
 If you are running on the **DESP**, the packages may already be available. Just make sure your kernel has `earthkit-data` and `healpy` installed.
@@ -55,13 +55,33 @@ Open and run **`02_climate_change_destine.ipynb`**. This notebook:
 
 The Configuration is in the beginning: you can change models, variables, time periods, and experiments there.
 
+### 5. Browse the full data portfolio (lazy)
+
+Open **`03_lazy_browse_portfolio.ipynb`**. This notebook:
+
+1. Opens the entire Climate DT monthly portfolio as an **instant xarray Dataset** — no data is downloaded
+2. Variables, coordinates, and attributes appear immediately
+3. Data is fetched from Polytope **only when you access values** (e.g. plotting, `.values`, `.compute()`)
+4. Supports all 6 levtypes: `sfc`, `pl`, `hl`, `sol`, `o2d`, `o3d` — just uncomment the desired `LEVTYPE` in the configuration cell
+
+The variable catalogue is defined in `destine_portfolio.py` (65 variables across all levtypes).
+
+> **Note:** For multi-level levtypes (`pl`, `hl`, `sol`, `o3d`) you need to select a specific level when plotting, e.g.
+> ```python
+> ds["avg_t"].sel(model="ICON", time="2014-06-01", level=850)
+> ```
+> Without `.sel(level=...)`, xarray will try to fetch data for **all** levels at once.
+
 ## Files
 
 | File | Description |
 |------|-------------|
 | `01_key_destine_once.ipynb` | One-time authentication — stores your API key in order to access Climate DT data |
-| `02_climate_change_destine.ipynb` | Climate change analysis notebook |
+| `02_climate_change_destine.ipynb` | Climate change analysis notebook (batch download, 30-year means) |
+| `03_lazy_browse_portfolio.ipynb` | Lazy browsing of the full Climate DT portfolio (instant xarray Dataset) |
 | `destine_climate_helpers.py` | Helper module (polytope request handling, caching, data retrieval, chunking over years) |
+| `destine_portfolio.py` | Data portfolio — 65 variables across 6 levtypes (`sfc`, `pl`, `hl`, `sol`, `o2d`, `o3d`) |
+| `polytope_zarr.py` | Virtual zarr store backed by Polytope (lazy chunk fetching) |
 
 ## Configuration options
 
