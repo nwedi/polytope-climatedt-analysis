@@ -62,7 +62,7 @@ The Configuration is in the beginning: you can change models, variables, time pe
 
 ### 5. Browse the full data portfolio (lazy)
 
-Open **`03_lazy_browse_portfolio.ipynb`**. This notebook:
+Open **`03_lazy_browse_portfolio.ipynb`** (monthly) or **`04_lazy_browse_portfolio_hourly.ipynb`** (hourly/daily). These notebooks:
 
 1. Opens the entire Climate DT monthly portfolio as an **instant xarray Dataset**, no data is downloaded
 2. Variables, coordinates, and attributes appear immediately
@@ -109,9 +109,9 @@ Atmosphere fields (sfc, pl, hl, sol) are hourly; ocean/ice (o2d, o3d) are daily 
 | `polytope_zarr.py` | Virtual zarr store backed by Polytope (lazy chunk fetching) |
 | `requirements.txt` | Python dependencies with version pins (zarr v2, numcodecs) |
 
-## Configuration options
+## Configuration options for `02_climate_change_destine.ipynb`
 
-All options are in the configuration cell of `02_climate_change_destine.ipynb`:
+All options are in the configuration cell of the notebook:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
