@@ -23,7 +23,7 @@ cd polytope-climate-analysis
 conda create -n destine-analysis python=3.13 -c conda-forge
 conda activate destine-analysis
 conda install -c conda-forge healpy cartopy matplotlib numpy xarray pandas netcdf4 ipykernel "zarr>=2.18,<3" "numcodecs<0.16"
-pip install earthkit-data polytope-client conflator lxml pydantic
+pip install earthkit-data earthkit-geo polytope-client conflator lxml pydantic covjsonkit
 ```
 
 **Option B: Using venv (no conda required)**
@@ -104,6 +104,8 @@ Atmosphere fields (sfc, pl, hl, sol) are hourly; ocean/ice (o2d, o3d) are daily 
 | `02_climate_change_destine.ipynb` | Climate change analysis notebook (batch download, 30-year means) |
 | `03_lazy_browse_portfolio.ipynb` | Lazy browsing of the full Climate DT monthly (clmn) portfolio |
 | `04_lazy_browse_portfolio_hourly.ipynb` | Lazy browsing of the hourly (clte) portfolio |
+| `TEST_03_monthly_test_server.ipynb` | Monthly (clmn) tests on `polytope-test.mn5` — lazy browse, area, timeseries, bbox, polygon |
+| `TEST_04_hourly_test_server.ipynb` | Hourly (clte) tests on `polytope-test.mn5` — lazy browse, area, timeseries, bbox, polygon |
 | `destine_climate_helpers.py` | Helper module (polytope request handling, caching, data retrieval, chunking over years) |
 | `destine_portfolio.py` | Data portfolio — clmn (65 vars) and clte (64 vars) across 6 levtypes |
 | `polytope_zarr.py` | Virtual zarr store backed by Polytope (lazy chunk fetching) |
@@ -150,12 +152,13 @@ Re-running the notebook skips years that are already cached. You do not need to 
 ## Requirements
 
 - Python ≥ 3.10
-- `earthkit-data`
-- `polytope-client`
-- `xarray`
-- `healpy`
-- `matplotlib`
-- `numpy`
-- `pandas`
-- `netcdf4`
+- `earthkit-data` — data access via Polytope
+- `earthkit-geo` — country polygon extraction for feature requests
+- `polytope-client` — Polytope API client
+- `covjsonkit` — CoverageJSON support
+- `xarray`, `numpy`, `pandas`, `netcdf4` — data handling
+- `healpy` — HEALPix grid operations and plotting
+- `matplotlib`, `cartopy` — visualisation and map projections
+- `conflator`, `lxml`, `pydantic` — configuration and parsing
+- `zarr>=2.18,<3`, `numcodecs<0.16` — virtual Zarr store (v2 required)
 - A valid [DESP account](https://platform.destine.eu/) for Climate DT data, with upgraded access
