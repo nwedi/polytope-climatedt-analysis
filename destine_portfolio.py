@@ -456,7 +456,7 @@ def find_variable(query=None):
                         continue
                 freq_label = {"MS": "monthly", "h": "hourly", "D": "daily"}
                 rows.append({
-                    "stream": stream_name,
+                    "stream/activity": stream_name,
                     "shortName": var_name,
                     "levtype": lt_spec["levtype"],
                     "freq": freq_label.get(lt_spec["freq"], lt_spec["freq"]),
@@ -470,7 +470,7 @@ def find_variable(query=None):
 
     df = pd.DataFrame(rows)
     if len(df):
-        df = df.sort_values(["shortName", "stream", "levtype"]).reset_index(drop=True)
+        df = df.sort_values(["shortName", "stream/activity", "levtype"]).reset_index(drop=True)
     return df
 
 
@@ -491,7 +491,7 @@ def access_snippet(query, stream="clte", experiment=None, model=None):
         ``"IFS-FESOM"`` for storyline.
     """
     df = find_variable(query)
-    df = df[df["stream"] == stream]
+    df = df[df["stream/activity"] == stream]
     if df.empty:
         print(f"No match for '{query}' in stream '{stream}'.")
         return
@@ -563,7 +563,12 @@ def access_snippet(query, stream="clte", experiment=None, model=None):
     portfolio = info["portfolio"]
     levels = portfolio[lt_key]["levels"]
 
-    sel_parts = f'{sel_dim}="{first_model}", time="{first_time}"'
+    if stream == "storyline":
+        first_sel_val = exp[0] if isinstance(exp, list) else exp
+    else:
+        first_sel_val = first_model
+
+    sel_parts = f'{sel_dim}="{first_sel_val}", time="{first_time}"'
     if levels is not None:
         first_level = levels[0]
         sel_parts += f", level={first_level}"
@@ -571,7 +576,8 @@ def access_snippet(query, stream="clte", experiment=None, model=None):
     lines.append("")
     lines.append("import healpy as hp")
     lines.append(f'field = ds["{var}"].sel({sel_parts})')
-    lines.append(f'hp.mollview(field.values, title="{first_model} — {var} — {first_time}",')
+    title_label = first_sel_val if stream == "storyline" else first_model
+    lines.append(f'hp.mollview(field.values, title="{title_label} — {var} — {first_time}",')
     lines.append(f'           unit="{row["units"]}", cmap="RdYlBu_r", nest=True, flip="geo")')
 
     code = "\n".join(lines)
