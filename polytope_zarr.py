@@ -69,7 +69,9 @@ class PolytopeZarrStore(MutableMapping):
                         resolution="standard",
                         realization=1,
                         activity=None,
-                        address=None):
+                        address=None,
+                        filter_months=None,
+                        filter_hours=None):
         """Create a store for DestinE Climate DT Generation 2 data.
 
         Parameters
@@ -92,6 +94,16 @@ class PolytopeZarrStore(MutableMapping):
         start_date, end_date : str, optional
             ISO date strings (e.g. "2020-01-01").  Required when
             *frequency* = "hourly" or *activity* = "story-nudging".
+        filter_months : list of int, optional
+            Restrict the time axis to these months (1–12).  Works with
+            both ``frequency="monthly"`` and ``frequency="hourly"``.
+            E.g. ``[6, 7, 8]`` for JJA.  Also constrains feature and
+            area requests so only these months are fetched server-side.
+        filter_hours : list of int, optional
+            Restrict the time axis to these hours (0–23).  Only valid
+            with *frequency* = "hourly".  E.g. ``[12, 13, 14]`` for
+            12/13/14 UTC.  Also constrains feature and area requests
+            so only these hours are fetched server-side.
         resolution : str, optional
             "standard" (nside 128) or "high".  Default "standard".
             High resolution is nside 1024 (4.4 km) for baseline/projections,
@@ -212,15 +224,25 @@ class PolytopeZarrStore(MutableMapping):
 
         # Time axis & request fields from portfolio freq
         freq = lt["freq"]  # "MS", "h", or "D"
+        # Validate filter_hours vs frequency (filter_months works with both)
+        if filter_hours is not None and frequency != "hourly":
+            raise ValueError("filter_hours= is only valid with frequency='hourly'")
+
         if freq == "MS":
             time_axis = pd.date_range(
                 f"{min(years)}-01", f"{max(years)}-12", freq="MS")
+            if filter_months is not None:
+                time_axis = time_axis[time_axis.month.isin(filter_months)]
             time_fields = ["year", "month"]
-            batch_size = 12
+            batch_size = len(filter_months) if filter_months else 12
         elif freq == "h":
             time_axis = pd.date_range(start_date, end_date, freq="h")
+            if filter_months is not None:
+                time_axis = time_axis[time_axis.month.isin(filter_months)]
+            if filter_hours is not None:
+                time_axis = time_axis[time_axis.hour.isin(filter_hours)]
             time_fields = ["date", "time"]
-            batch_size = 24
+            batch_size = len(filter_hours) if filter_hours else 24
         elif freq == "D":
             time_axis = pd.date_range(start_date, end_date, freq="D")
             time_fields = ["date", "time"]
@@ -260,6 +282,8 @@ class PolytopeZarrStore(MutableMapping):
         store._frequency = frequency
         store._freq = freq  # "MS", "h", or "D" — from portfolio
         store._resolution = resolution
+        store._filter_months = filter_months
+        store._filter_hours = filter_hours
         store.nside = nside
         return store
 
@@ -885,14 +909,17 @@ def _feature_sel(store, var_name, *, bbox=None, polygon=None, point=None,
 
     if is_monthly:
         # Monthly (clmn) — use year/month fields
+        filter_months = getattr(store, '_filter_months', None)
         if isinstance(time_arg, slice):
             t0 = pd.Timestamp(time_arg.start or store._coords["time"][0])
             t1 = pd.Timestamp(time_arg.stop or store._coords["time"][-1])
             months = pd.date_range(t0, t1, freq="MS")
+            if filter_months is not None:
+                months = months[months.month.isin(filter_months)]
             years = sorted({m.year for m in months})
             mons = sorted({m.month for m in months})
-            request["year"] = "/to/".join([str(years[0]), str(years[-1])]) if len(years) > 1 else str(years[0])
-            request["month"] = "/to/".join([str(mons[0]), str(mons[-1])]) if len(mons) > 1 else str(mons[0])
+            request["year"] = "/".join(str(y) for y in years)
+            request["month"] = "/".join(str(m) for m in mons)
         elif time_arg is not None:
             ts = pd.Timestamp(time_arg)
             request["year"] = str(ts.year)
@@ -903,12 +930,16 @@ def _feature_sel(store, var_name, *, bbox=None, polygon=None, point=None,
             request["month"] = str(ts.month)
     else:
         # Hourly / daily (clte) — use date/time fields
-        _ALL_HOURS = "/".join(f"{h:02d}00" for h in range(24))
+        filter_hours = getattr(store, '_filter_hours', None)
+        if filter_hours is not None:
+            _HOURS = "/".join(f"{h:02d}00" for h in sorted(filter_hours))
+        else:
+            _HOURS = "/".join(f"{h:02d}00" for h in range(24))
         if isinstance(time_arg, slice):
             t0 = pd.Timestamp(time_arg.start or store._coords["time"][0])
             t1 = pd.Timestamp(time_arg.stop or store._coords["time"][-1])
             date_str = f"{t0.strftime('%Y%m%d')}/to/{t1.strftime('%Y%m%d')}"
-            time_str = _ALL_HOURS if freq == "h" else "0000"
+            time_str = _HOURS if freq == "h" else "0000"
         elif time_arg is not None:
             ts = pd.Timestamp(time_arg)
             date_str = ts.strftime("%Y%m%d")
@@ -1048,19 +1079,18 @@ def _area_sel(store, var_name, *, area, grid=None, **sel_kwargs):
     request["grid"] = str(grid)
 
     # ── time handling ─────────────────────────────────────────────────
-    _ALL_HOURS = "/".join(f"{h:02d}00" for h in range(24))
     freq = getattr(store, "_freq", "MS")
 
     time_arg = sel_kwargs.get("time")
     if freq == "MS":
         # Monthly store: use year/month fields (clmn stream).
-        # Multi-month slices send a single request with unique years
-        # and all months; decoded with time_dim_mode="valid_time"
-        # to avoid the step_timedelta hypercube issue (earthkit-data#948).
+        filter_months = getattr(store, '_filter_months', None)
         if isinstance(time_arg, slice):
             t0 = pd.Timestamp(time_arg.start or store._coords["time"][0])
             t1 = pd.Timestamp(time_arg.stop or store._coords["time"][-1])
             months = pd.date_range(t0, t1, freq="MS")
+            if filter_months is not None:
+                months = months[months.month.isin(filter_months)]
             unique_years = sorted(set(m.year for m in months))
             unique_months = sorted(set(m.month for m in months))
             request["year"] = "/".join(str(y) for y in unique_years)
@@ -1075,11 +1105,16 @@ def _area_sel(store, var_name, *, area, grid=None, **sel_kwargs):
             request["month"] = str(ts.month)
     else:
         # Hourly / daily store
+        filter_hours = getattr(store, '_filter_hours', None)
+        if filter_hours is not None:
+            _HOURS = "/".join(f"{h:02d}00" for h in sorted(filter_hours))
+        else:
+            _HOURS = "/".join(f"{h:02d}00" for h in range(24))
         if isinstance(time_arg, slice):
             t0 = pd.Timestamp(time_arg.start or store._coords["time"][0])
             t1 = pd.Timestamp(time_arg.stop or store._coords["time"][-1])
             date_str = f"{t0.strftime('%Y%m%d')}/to/{t1.strftime('%Y%m%d')}"
-            time_str = _ALL_HOURS if freq == "h" else "0000"
+            time_str = _HOURS if freq == "h" else "0000"
         elif time_arg is not None:
             ts = pd.Timestamp(time_arg)
             date_str = ts.strftime("%Y%m%d")
@@ -1169,24 +1204,34 @@ try:
                 area=None, grid=None, **kwargs):
             """Select data, with optional server-side spatial subsetting.
 
-            When *area* is given the request adds MARS ``area`` + ``grid``
-            keywords for server-side regridding (works for both ``clmn``
-            and ``clte`` streams).
+            *var* can be a single variable name, a ``"/"``-separated string
+            (e.g. ``"skt/tcc"``), or a list of names (e.g.
+            ``["skt", "tcc"]``).  Lists are joined with ``"/"`` so the
+            server returns all requested parameters in one response.
+
+            If *var* is omitted and a spatial keyword (``bbox``, ``polygon``,
+            ``point``, or ``area``) is given, all data variables in the
+            Dataset are requested (joined with ``"/"``).  This means
+            ``ds[["skt", "tcc"]].polytope.sel(bbox=...)`` automatically
+            requests both variables.
 
             When *bbox*, *polygon*, or *point* is given the request is
             executed as a Polytope **feature** (``clte`` stream, lat/lon
             grid).  Otherwise delegates to the normal ``.sel()`` with
             automatic batch tuning.
             """
+            if isinstance(var, (list, tuple)):
+                var = "/".join(str(v) for v in var)
+            if var is None and (bbox is not None or polygon is not None
+                                or point is not None or area is not None):
+                var = "/".join(self._ds.data_vars)
             if area is not None:
-                name = var or next(iter(self._ds.data_vars))
                 return _area_sel(
-                    self._store, name,
+                    self._store, var,
                     area=area, grid=grid, **kwargs)
             if bbox is not None or polygon is not None or point is not None:
-                name = var or next(iter(self._ds.data_vars))
                 return _feature_sel(
-                    self._store, name,
+                    self._store, var,
                     bbox=bbox, polygon=polygon, point=point, **kwargs)
             _infer_batch_window(self._store, kwargs)
             result = self._ds.sel(**kwargs)
