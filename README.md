@@ -1,181 +1,204 @@
-# DestinE Climate Change Analysis
+# fdb_xarray
 
-Analyse climate change signals from **DestinE Climate DT Generation 2** simulations and browse the whole Climate DT catalogue via streaming.
-The first example downloads monthly data (`clmn` stream) via Earthkit and [Polytope](https://github.com/ecmwf/polytope-client), computes 30-year mean differences between historical and SSP3-7.0 scenario experiments, and plots the results on the HEALPix grid.
-The second example opens the full Generation 2 portfolio as a lazy xarray Dataset: monthly data are streamed on access and not saved to disk. Batched multi-year requests (via `.polytope.sel()`) make it efficient enough for full climate change analysis, entirely via streaming.
+A thin wrapper that exposes Destination Earth Climate-DT FDB data (served through
+`z3fdb`) as lazy `xarray.Dataset` objects. One function call replaces the
+manual MARS-request assembly and integer-indexed zarr access.
 
-Supports the three Climate DT models **IFS-NEMO**, **IFS-FESOM**, and **ICON**.
+## Prerequisites
 
-## Quick start
+- `z3fdb`, `zarr` (>= 3), `xarray`, `dask`, `pandas`, `numpy`
+- A reachable FDB endpoint described in `./config.yaml`
+- `destine_portfolio.py` (ships alongside this module) for variable metadata
 
-### 1. Clone this repository
+## The main function
 
-```bash
-git clone https://github.com/trackow/polytope-climatedt-analysis.git
-cd polytope-climate-analysis
+```python
+from fdb_xarray import open_climate_dt
+
+ds = open_climate_dt(
+    portfolio,           # "CLMN" (monthly) or "CLTE" (hourly atmos / daily ocean)
+    levtype,             # "sfc" | "pl" | "hl" | "sol" | "o2d" | "o3d"
+    model,               # "IFS-FESOM" | "ICON" | (NEMO when available)
+    experiment,          # "hist" | "SSP3-7.0" | "cont" | ...
+    years=None,          # range(y0, y1+1) — open a full-year span
+    start_date=None,     # alternative to years: "YYYY-MM-DD"
+    end_date=None,       # alternative to years: "YYYY-MM-DD"
+    resolution="standard",   # "standard" (nside=128) or "high" (nside=1024)
+    variables=None,      # subset of the levtype's variables; default = all
+    config_path="./config.yaml",
+)
 ```
 
-### 2. Set up the Python environment
+Returns an `xarray.Dataset` whose dimensions are:
+- `(time, scenario, cell)` for 2D levtypes (`sfc`, `o2d`)
+- `(time, scenario, level, cell)` for 3D levtypes (`pl`, `hl`, `sol`, `o3d`)
 
-**Option A: Using conda**
+Variables carry `long_name` and `units`; the dataset carries `grid`, `nside`,
+and the original `mars_request` as attributes. All arrays are dask-backed, so
+opening is cheap; data is only fetched when you `.compute()`.
 
-```bash
-conda create -n destine-analysis python=3.13 -c conda-forge
-conda activate destine-analysis
-conda install -c conda-forge healpy cartopy matplotlib numpy xarray pandas netcdf4 ipykernel "zarr>=2.18,<3" "numcodecs<0.16"
-pip install earthkit-data earthkit-geo polytope-client conflator lxml pydantic covjsonkit
+## Examples
+
+### 1. Hourly surface — 2 m temperature snapshot
+
+```python
+ds = open_climate_dt(
+    portfolio="CLTE", levtype="sfc",
+    model="IFS-FESOM", experiment="hist",
+    years=range(1990, 2015),
+)
+
+field = ds["2t"].sel(time="2014-01-01T12:00", scenario="hist").values
 ```
 
-**Option B: Using venv (no conda required)**
+### 2. Hourly surface — annual mean via dask
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+```python
+hist_mean = (
+    ds["avg_tprate"]
+    .sel(time=slice("2014-01-01", "2014-12-31"), scenario="hist")
+    .mean("time")
+    .compute()
+    .values
+)
 ```
 
-> **Important:** `polytope_zarr.py` requires **zarr v2** (`zarr>=2.18,<3`) and `numcodecs<0.16`.
-> These pins are included in `requirements.txt`.  Installing zarr v3 will cause a `TypeError: Unsupported type for store_like` error.
+The actual download happens only at `.compute()`; dask streams one hourly
+chunk at a time.
 
-If you are running on the **DESP**, the packages may already be available. Just make sure your kernel has `earthkit-data` and `healpy` installed, and that `zarr<3` is pinned.
+### 3. Scenario projection (SSP3-7.0)
 
-### 3. Authenticate (once per session)
-
-Open and run **`01_key_destine_once.ipynb`**. This will:
-
-1. Clone the [polytope-examples](https://github.com/destination-earth-digital-twins/polytope-examples) repository (once)
-2. Run the DestinE authentication script. You will be prompted for your **DESP credentials**
-3. Store the API key in `~/.polytopeapirc`
-
-You only need to do this **once**. All subsequent notebooks will pick up the key automatically.
-
-### 4. Run the climate change analysis
-
-Open and run **`02_climate_change_destine.ipynb`**. This notebook:
-
-1. Downloads monthly 2m temperature data for the configured models and time periods
-2. Computes the climate change signal (scenario mean minus historical mean)
-3. Plots the result on the HEALPix grid, as a Mollweide map
-4. Prints global-mean temperature change per model
-
-The Configuration is in the beginning: you can change models, variables, time periods, and experiments there.
-
-### 5. Browse the full data portfolio (lazy)
-
-Open **`03_lazy_browse_portfolio.ipynb`** (monthly) or **`04_lazy_browse_portfolio_hourly.ipynb`** (hourly/daily). These notebooks:
-
-1. Opens the entire Climate DT monthly portfolio as an **instant xarray Dataset**, no data is downloaded
-2. Variables, coordinates, and attributes appear immediately
-3. Data is fetched via Polytope **only when you access values** (e.g. plotting, `.values`, `.compute()`)
-4. Supports all 6 levtypes: `sfc`, `pl`, `hl`, `sol`, `o2d`, `o3d`: just uncomment the desired `LEVTYPE` in the configuration cell
-
-The variable catalogue is defined in `destine_portfolio.py` (65 variables across all levtypes).
-
-### 6. Look up variables and get access snippets
-
-Open **`05_variable_lookup.ipynb`**. This notebook lets you:
-
-1. Search for variables by **shortName** (e.g. `"2t"`, `"avg_tos"`) or by **keyword** in the long name (e.g. `"temperature"`, `"wind"`)
-2. See which streams (monthly, hourly, storyline), levtypes, models, and experiments each variable is available in
-3. Generate a **ready-to-copy** `from_climate_dt()` code snippet with `access_snippet()`
-4. Browse the full catalogue of all ~190 variable × stream combinations
-5. Inspect the **last Polytope request** sent by the store — useful for reuse with `earthkit.data` directly:
-   ```python
-   r = store.last_request
-   data = earthkit.data.from_source("polytope", r["collection"], r["request"],
-                                    address=r["address"], stream=False)
-   field = data.to_numpy()
-   ```
-
-### CLTE (hourly) stream — variable summary
-
-The hourly (`clte`) stream provides 64 variables across 6 levtypes.
-Atmosphere fields (sfc, pl, hl, sol) are hourly; ocean/ice (o2d, o3d) are daily means.
-
-| levtype | # vars | time res | description |
-|---------|--------|----------|-------------|
-| sfc (instant) | 14 | hourly | Standard shortNames (no `avg_` prefix): `tclw`, `tciw`, `sp`, `tcw`, `tcwv`, `sd`, `msl`, `tcc`, `10u`, `10v`, `2t`, `2d`, `10si`, `skt` |
-| sfc (hourly mean) | 20 | hourly | Fluxes / radiation — keep `avg_` prefix: `avg_surfror` … `avg_tprate` |
-| pl | 9 | hourly | 19 pressure levels (1000–1 hPa): `pv`, `z`, `t`, `u`, `v`, `q`, `w`, `r`, `clwc` |
-| hl | 2 | hourly | 100 m only, IFS-only: `u`, `v` |
-| sol | 2 | hourly | Snow (1–5) + soil (1–4/5): `sd`, `vsw` |
-| o2d | 12 | daily | Sea ice (6) + ocean surface (6), `avg_` prefix |
-| o3d | 5 | daily | 3-D ocean (up to 75 levels), `avg_` prefix |
-
-> **Key difference from clmn:** SFC instantaneous, PL, HL, and SOL params use standard ECMWF shortNames
-> (e.g. `2t` instead of `avg_2t`). Also `10si` instead of `10ws` for 10 m wind speed.
-> Ocean/ice fields remain `avg_`-prefixed (daily means).
-
-> **Note:** For multi-level levtypes (`pl`, `hl`, `sol`, `o3d`) you need to select a specific level when plotting, e.g.
-> ```python
-> ds["avg_t"].sel(model="ICON", time="2014-06-01", level=850)
-> ```
-> Without `.sel(level=...)`, xarray will try to fetch data for **all** levels at once.
-
-## Files
-
-| File | Description |
-|------|-------------|
-| `01_key_destine_once.ipynb` | One-time authentication — stores your API key in order to access Climate DT data |
-| `02_climate_change_destine.ipynb` | Climate change analysis notebook (batch download, 30-year means) |
-| `03_lazy_browse_portfolio.ipynb` | Lazy browsing of the full Climate DT monthly (clmn) portfolio |
-| `04_lazy_browse_portfolio_hourly.ipynb` | Lazy browsing of the hourly (clte) portfolio |
-| `05_variable_lookup.ipynb` | Variable discovery — search by name/keyword, generate `from_climate_dt()` snippets |
-| `TEST_03_monthly_test_server.ipynb` | Monthly (clmn) tests on `polytope-test.mn5` — lazy browse, area, timeseries, bbox, polygon |
-| `TEST_04_hourly_test_server.ipynb` | Hourly (clte) tests on `polytope-test.mn5` — lazy browse, area, timeseries, bbox, polygon |
-| `destine_climate_helpers.py` | Helper module (polytope request handling, caching, data retrieval, chunking over years) |
-| `destine_portfolio.py` | Data portfolio — clmn (65 vars) and clte (64 vars) across 6 levtypes, plus `find_variable()` and `access_snippet()` lookup helpers |
-| `polytope_zarr.py` | Virtual zarr store backed by Polytope (lazy chunk fetching) |
-| `requirements.txt` | Python dependencies with version pins (zarr v2, numcodecs) |
-
-## Configuration options for `02_climate_change_destine.ipynb`
-
-All options are in the configuration cell of the notebook:
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `PARAM` | `'avg_2t'` | Variable to analyse (e.g. `'avg_2t'`, `'235043'` for precip) |
-| `MODELS` | `['IFS-NEMO', 'IFS-FESOM']` | Models to include (add `'ICON'` when available) |
-| `RESOLUTION` | `'standard'` | Grid resolution (`'standard'` = H128, `'high'` = H1024) |
-| `HIST_YEARS` | `range(1990, 2015)` | Historical period |
-| `HIST_EXPERIMENT` | `'hist'` | Historical experiment name |
-| `SCEN_YEARS` | `range(2015, 2050)` | Scenario period |
-| `SCEN_EXPERIMENT` | `'SSP3-7.0'` | Scenario experiment name |
-| `STORE_DATA` | `True` | Cache downloaded data as per-year NetCDF files |
-| `DATA_DIR` | `'./data'` | Directory for cached data |
-
-## Data caching
-
-When `STORE_DATA = True`, downloaded data are saved as individual NetCDF files per year:
-
-```
-data/
-├── IFS-NEMO/
-│   ├── hist/clmn/standard/
-│   │   ├── avg_2t_1990.nc
-│   │   ├── avg_2t_1991.nc
-│   │   └── ...
-│   └── SSP3-7.0/clmn/standard/
-│       ├── avg_2t_2015.nc
-│       └── ...
-├── IFS-FESOM/
-│   └── ...
-└── ICON/
-    └── ...
+```python
+ds_scen = open_climate_dt(
+    portfolio="CLTE", levtype="sfc",
+    model="IFS-FESOM", experiment="SSP3-7.0",
+    years=range(2015, 2050),
+)
+t2_2049 = (
+    ds_scen["2t"]
+    .sel(time=slice("2049-01-01", "2049-12-31"), scenario="SSP3-7.0")
+    .mean("time").compute()
+)
 ```
 
-Re-running the notebook skips years that are already cached. You do not need to think about this step.
+### 4. 3D atmosphere (pressure levels)
 
-## Requirements
+```python
+ds_pl = open_climate_dt(
+    portfolio="CLTE", levtype="pl",
+    model="IFS-FESOM", experiment="hist",
+    years=range(2014, 2015),
+    variables=["t", "z"],        # subset the 9-variable portfolio
+)
 
-- Python ≥ 3.10
-- `earthkit-data` — data access via Polytope
-- `earthkit-geo` — country polygon extraction for feature requests
-- `polytope-client` — Polytope API client
-- `covjsonkit` — CoverageJSON support
-- `xarray`, `numpy`, `pandas`, `netcdf4` — data handling
-- `healpy` — HEALPix grid operations and plotting
-- `matplotlib`, `cartopy` — visualisation and map projections
-- `conflator`, `lxml`, `pydantic` — configuration and parsing
-- `zarr>=2.18,<3`, `numcodecs<0.16` — virtual Zarr store (v2 required)
-- A valid [DESP account](https://platform.destine.eu/) for Climate DT data, with upgraded access
+t500 = ds_pl["t"].sel(time="2014-01-01T12:00", scenario="hist", level=500)
+profile = ds_pl["t"].sel(time="2014-07-01T12:00", scenario="hist").isel(cell=0).compute()
+```
+
+### 5. 3D ocean (daily, 75 levels)
+
+```python
+ds_o3d = open_climate_dt(
+    portfolio="CLTE", levtype="o3d",
+    model="IFS-FESOM", experiment="hist",
+    years=range(2014, 2015),
+    variables=["avg_thetao"],
+)
+surface_sst = ds_o3d["avg_thetao"].sel(time="2014-07-01", level=1, scenario="hist").compute()
+```
+
+### 6. High resolution — short window with explicit dates
+
+For high-res hourly, use `start_date`/`end_date` instead of `years` to scope
+the request to a month or a few days.
+
+```python
+ds_hi = open_climate_dt(
+    portfolio="CLTE", levtype="sfc",
+    model="IFS-FESOM", experiment="hist",
+    start_date="2014-01-01", end_date="2014-01-31",
+    resolution="high",
+    variables=["2t"],
+)
+# nside=1024, 12_582_912 cells, 744 hourly steps
+
+monthly_mean = ds_hi["2t"].sel(scenario="hist").mean("time").compute()
+daily_means  = ds_hi["2t"].sel(scenario="hist").resample(time="1D").mean()
+```
+
+### 7. Monthly ocean fields (CLMN)
+
+Pre-aggregated monthly means are available for ocean variables in standard and
+high resolution.
+
+```python
+ds_m = open_climate_dt(
+    portfolio="CLMN", levtype="o2d",
+    model="IFS-FESOM", experiment="hist",
+    years=range(2014, 2015),
+    resolution="high",
+    variables=["avg_tos"],
+)
+# dims: time=12, cell=12_582_912
+jul_sst = ds_m["avg_tos"].sel(time="2014-07-01", scenario="hist").compute()
+```
+
+## What's in the dataset
+
+```python
+ds = open_climate_dt(portfolio="CLTE", levtype="sfc",
+                     model="IFS-FESOM", experiment="hist",
+                     years=range(1990, 2015))
+print(ds)                # dims, coords, variables, attrs
+print(list(ds.data_vars))
+print(ds["2t"].attrs)    # {'long_name': '2 metre temperature', 'units': 'K'}
+print(ds.attrs)          # portfolio, levtype, model, experiment, grid, nside, mars_request
+```
+
+The `cell` coordinate is a HEALPix nest index (`ds.attrs["grid"] == "healpix-nest"`,
+`ds.attrs["nside"]` is 128 for standard and 1024 for high). Plot via `healpy`:
+
+```python
+import healpy as hp
+hp.mollview(field, nest=True, flip="geo", cmap="RdYlBu_r")
+```
+
+## Availability matrix (`experiment="hist"`, current config)
+
+| portfolio | levtype | res      | IFS-FESOM | ICON | IFS-NEMO |
+|-----------|---------|----------|:---------:|:----:|:--------:|
+| CLMN      | sfc     | any      | · | · | · |
+| CLMN      | pl      | standard | + | + | · |
+| CLMN      | pl      | high     | · | · | · |
+| CLMN      | o2d     | standard | + | + | · |
+| CLMN      | o2d     | high     | + | + | · |
+| CLMN      | o3d     | standard | + | + | · |
+| CLMN      | o3d     | high     | · | · | · |
+| CLTE      | any     | any      | + | + | · |
+
+- **CLTE** is fully populated for IFS-FESOM and ICON.
+- **Monthly atmospheric surface fields are not in CLMN.** To get them, open
+  `CLTE` hourly over the target window and aggregate (see example 6).
+- **IFS-NEMO is not reachable** through this FDB endpoint. Use polytope if
+  you need it.
+
+## Companion scripts
+
+- `05_xarray_wrapper_demo.py` — basic wrapper usage, numerical parity check.
+- `06_timing_compare.py` — xarray path vs. raw dask path; ~8 % overhead on
+  a 2014 annual-mean run.
+- `07_open_easy.py` — `open_climate_dt` for sfc and pl.
+- `08_projections_and_3d.py` — SSP3-7.0 projection, 3D atmosphere, 3D ocean.
+- `09_high_res_monthly.py` — high-res CLTE with monthly/daily aggregation.
+
+## Notes
+
+- The wrapper translates `freq` from the portfolio into a pandas offset:
+  `"h" → "1h"`, `"D" → "1D"` (daily data also uses `time=0000` in MARS with
+  the merged `(date, time)` axis), `"MS" → monthly starts`.
+- `experiment="hist"` maps to `activity=baseline`; everything else maps to
+  `activity=projections`.
+- The `scenario` dimension always has size 1 in practice (single experiment
+  per open); it exists to preserve the activity/experiment axis.
+- Opening is metadata-only. Even selecting multiple years is cheap; the
+  first real I/O is the first `.compute()` (or `.values`) call.
